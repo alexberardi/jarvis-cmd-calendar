@@ -1,0 +1,49 @@
+name: "get_calendar_events"
+display_name: "Calendar (iCloud & Google)"
+description: "Read calendar events for today, tomorrow, this weekend, or any date range. Supports iCloud CalDAV and Google Calendar. Includes upcoming event alert agent."
+version: "1.0.0"
+min_jarvis_version: "0.9.0"
+license: "MIT"
+author:
+  github: "alexberardi"
+categories: ["productivity", "calendar"]
+platforms: ["darwin", "linux"]
+keywords: ["calendar", "events", "schedule", "icloud", "google calendar", "appointments", "meetings"]
+
+packages:
+  - name: caldav
+  - name: httpx
+
+secrets:
+  - key: CALENDAR_TYPE
+    scope: integration
+    value_type: string
+    description: "Calendar provider: 'icloud' (default) or 'google'"
+    is_sensitive: false
+  - key: CALENDAR_DEFAULT_NAME
+    scope: integration
+    value_type: string
+    description: "Default calendar name to use"
+    is_sensitive: false
+  - key: CALENDAR_USERNAME
+    scope: integration
+    value_type: string
+    description: "iCloud username/Apple ID"
+    is_sensitive: false
+  - key: CALENDAR_PASSWORD
+    scope: integration
+    value_type: string
+    description: "iCloud app-specific password"
+  - key: GOOGLE_CLIENT_ID
+    scope: integration
+    value_type: string
+    description: "Google OAuth client ID (optional — default provided)"
+    is_sensitive: false
+  - key: GOOGLE_ACCESS_TOKEN
+    scope: integration
+    value_type: string
+    description: "Google OAuth access token (auto-populated)"
+  - key: GOOGLE_REFRESH_TOKEN
+    scope: integration
+    value_type: string
+    description: "Google OAuth refresh token (auto-populated)"
