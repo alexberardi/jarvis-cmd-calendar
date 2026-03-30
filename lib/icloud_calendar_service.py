@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 
-import requests
+import httpx
 
 try:
     from jarvis_log_client import JarvisLogger
@@ -59,7 +59,7 @@ class ICloudCalendarService:
         ]
         self.base_url = self.base_urls[0]  # Start with the first one
 
-        self.session = requests.Session()
+        self.session = httpx.Client(auth=(username, password), timeout=30.0)
         self._authenticated = False
         self._auth_cache_time = None
         self._auth_cache_duration = 3600  # 1 hour cache
@@ -83,16 +83,13 @@ class ICloudCalendarService:
         logger.info("Authentication cache expired or missing, performing full authentication")
 
         try:
-            # Set up basic auth as per OneCal article
-            self.session.auth = (self.username, self.password)
-
             # Try each base URL until one works
             for base_url in self.base_urls:
                 self.base_url = base_url
 
                 try:
                     # Step 1: Check server capabilities with OPTIONS
-                    options_response = self.session.options(base_url)
+                    options_response = self.session.request('OPTIONS', base_url)
 
                     if options_response.status_code != 200:
                         continue
@@ -111,7 +108,7 @@ class ICloudCalendarService:
                         'Depth': '0'
                     }
 
-                    principal_response = self.session.request('PROPFIND', base_url, data=principal_query, headers=principal_headers)
+                    principal_response = self.session.request('PROPFIND', base_url, content=principal_query, headers=principal_headers)
 
                     if principal_response.status_code in [200, 207]:
                         # Parse the response to find the principal URL
@@ -132,7 +129,7 @@ class ICloudCalendarService:
   </d:prop>
 </d:propfind>"""
 
-                            calendar_home_response = self.session.request('PROPFIND', full_principal_url, data=calendar_home_query, headers=principal_headers)
+                            calendar_home_response = self.session.request('PROPFIND', full_principal_url, content=calendar_home_query, headers=principal_headers)
 
                             if calendar_home_response.status_code in [200, 207]:
                                 # Parse the response to find the calendar home URL
@@ -158,7 +155,7 @@ class ICloudCalendarService:
                                         'Depth': '1'
                                     }
 
-                                    list_response = self.session.request('PROPFIND', full_calendar_home_url, data=list_calendars_query, headers=list_headers)
+                                    list_response = self.session.request('PROPFIND', full_calendar_home_url, content=list_calendars_query, headers=list_headers)
 
                                     if list_response.status_code in [200, 207]:
                                         # Success! We've completed the full CalDAV discovery sequence
@@ -344,7 +341,7 @@ class ICloudCalendarService:
 
             try:
                 logger.debug("Discovering calendars", url=calendars_url)
-                calendars_response = self.session.request('PROPFIND', calendars_url, data=propfind_query, headers=propfind_headers)
+                calendars_response = self.session.request('PROPFIND', calendars_url, content=propfind_query, headers=propfind_headers)
                 logger.debug("Calendar discovery response", status_code=calendars_response.status_code)
 
                 if calendars_response.status_code in [200, 207]:
@@ -388,7 +385,7 @@ class ICloudCalendarService:
                         'Depth': '1'
                     }
 
-                    response = self.session.request('REPORT', full_calendar_url, data=calendar_query, headers=headers)
+                    response = self.session.request('REPORT', full_calendar_url, content=calendar_query, headers=headers)
 
                     if response.status_code in [200, 207]:  # CalDAV returns 207 Multi-Status for successful queries
                         logger.debug("Calendar query successful", status_code=response.status_code)
@@ -487,7 +484,7 @@ class ICloudCalendarService:
                 'Content-Type': 'text/calendar; charset=utf-8'
             }
 
-            response = self.session.put(calendar_url, data=ical_event, headers=headers)
+            response = self.session.put(calendar_url, content=ical_event, headers=headers)
 
             return response.status_code in [200, 201]
 
@@ -557,7 +554,7 @@ END:VCALENDAR"""
                 'Content-Type': 'text/calendar; charset=utf-8'
             }
 
-            response = self.session.put(calendar_url, data=ical_event, headers=headers)
+            response = self.session.put(calendar_url, content=ical_event, headers=headers)
 
             return response.status_code == 200
 
@@ -599,7 +596,7 @@ END:VCALENDAR"""
 
         try:
             # Query for available calendars
-            response = self.session.propfind(f"{self.base_url}/{self.username}/calendars/")
+            response = self.session.request('PROPFIND', f"{self.base_url}/{self.username}/calendars/")
 
             if response.status_code == 200:
                 # Parse response to extract calendar names
