@@ -22,7 +22,7 @@ except ImportError:
         def error(self, msg, **kw): self._log.error(msg)
         def debug(self, msg, **kw): self._log.debug(msg)
 
-from lib.icloud_calendar_service import CalendarEvent
+from calendar_shared.icloud_calendar_service import CalendarEvent
 
 logger = JarvisLogger(service="jarvis-node")
 

@@ -25,9 +25,9 @@ from jarvis_command_sdk import (
     JarvisStorage,
     RequestInformation,
 )
-from lib.icloud_calendar_service import ICloudCalendarService
-from lib.google_calendar_service import GoogleCalendarService
-from lib.date_util import parse_date_array, format_date_display, dates_to_strings
+from calendar_shared.icloud_calendar_service import ICloudCalendarService
+from calendar_shared.google_calendar_service import GoogleCalendarService
+from calendar_shared.date_util import parse_date_array, format_date_display, dates_to_strings
 
 logger = JarvisLogger(service="jarvis-node")
 
