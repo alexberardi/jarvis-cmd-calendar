@@ -388,7 +388,7 @@ class ReadCalendarCommand(IJarvisCommand):
                         "events": formatted_events,
                         "total_events": len(all_events),
                         "voice_command": voice_command,
-                        "target_dates": target_dates,  # Include the actual datetime objects for follow-up context
+                        "target_dates": dates_to_strings(target_dates),
                         "date_display": date_display
                     }
                 )
@@ -406,7 +406,7 @@ class ReadCalendarCommand(IJarvisCommand):
                         "events": [],
                         "total_events": 0,
                         "voice_command": voice_command,
-                        "target_dates": target_dates,  # Include the actual datetime objects for follow-up context
+                        "target_dates": dates_to_strings(target_dates),
                         "date_display": date_display
                     }
                 )
