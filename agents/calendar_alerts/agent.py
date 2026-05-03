@@ -4,6 +4,9 @@ Runs every 5 minutes. Produces alerts based on how soon events are:
 - Event in <=15 min -> priority 3, TTL 15 min
 - Event in <=60 min -> priority 2, TTL 30 min
 
+Also injects today's events into the command center's memory system so
+Jarvis has proactive awareness of the user's schedule.
+
 Requires calendar secrets to be configured (skipped otherwise via standard
 agent discovery secret validation).
 """
@@ -96,7 +99,7 @@ class CalendarAlertAgent(IJarvisAgent):
         return False
 
     async def run(self) -> None:
-        """Fetch today's calendar events and generate time-proximity alerts."""
+        """Fetch today's calendar events, generate alerts, and inject into CC memory."""
         try:
             try:
                 from commands.get_calendar_events.command import ReadCalendarCommand
@@ -126,6 +129,9 @@ class CalendarAlertAgent(IJarvisAgent):
 
             for event in events:
                 self._process_event(event, now)
+
+            # Inject events into CC memory for proactive voice context
+            self._inject_memories(events)
 
         except Exception as e:
             logger.error("Calendar agent run failed", error=str(e))
@@ -188,3 +194,72 @@ class CalendarAlertAgent(IJarvisAgent):
 
     def get_alerts(self) -> List[Alert]:
         return list(self._alerts)
+
+    def _inject_memories(self, events: List[Dict[str, Any]]) -> None:
+        """Push calendar events into CC memory system for proactive context."""
+        try:
+            from clients.rest_client import RestClient
+        except ImportError:
+            logger.debug("RestClient not available — skipping memory injection")
+            return
+
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        memories = []
+
+        for event in events:
+            title = event.get("title") or event.get("summary", "Untitled event")
+            start_str = event.get("start_time") or event.get("start", "")
+            end_str = event.get("end_time") or event.get("end", "")
+            location = event.get("location", "")
+            is_all_day = event.get("is_all_day", False)
+            event_id = event.get("id", title)
+
+            # Format as natural language
+            if is_all_day:
+                content = f"{title} (all day)"
+            else:
+                # Format times for readability
+                start_display = start_str
+                end_display = end_str
+                try:
+                    if isinstance(start_str, str):
+                        s = start_str.replace("Z", "+00:00")
+                        start_dt = datetime.fromisoformat(s)
+                        start_display = start_dt.strftime("%I:%M%p")
+                    if isinstance(end_str, str):
+                        e = end_str.replace("Z", "+00:00")
+                        end_dt = datetime.fromisoformat(e)
+                        end_display = end_dt.strftime("%I:%M%p")
+                except (ValueError, TypeError):
+                    pass
+                content = f"{start_display} - {end_display}: {title}"
+
+            if location:
+                content += f" at {location}"
+
+            # TTL: expire 1 hour after event end, or 24h for all-day
+            ttl_hours = 24.0
+            if not is_all_day and end_str:
+                try:
+                    e_str = end_str.replace("Z", "+00:00") if isinstance(end_str, str) else ""
+                    end_dt = datetime.fromisoformat(e_str)
+                    hours_until_end = (end_dt - datetime.now(timezone.utc)).total_seconds() / 3600
+                    ttl_hours = max(1.0, hours_until_end + 1.0)
+                except (ValueError, TypeError):
+                    pass
+
+            memories.append({
+                "content": content,
+                "category": "calendar",
+                "key": f"calendar:{today}:{event_id}",
+                "ttl_hours": ttl_hours,
+                "source": "calendar-agent",
+            })
+
+        if memories:
+            result = RestClient.inject_memories(memories)
+            if result:
+                logger.info(
+                    "Calendar agent injected memories",
+                    count=result.get("injected", 0) + result.get("updated", 0),
+                )
