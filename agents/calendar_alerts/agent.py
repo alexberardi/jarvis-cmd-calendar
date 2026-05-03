@@ -38,7 +38,7 @@ from jarvis_command_sdk import (
 
 logger = JarvisLogger(service="jarvis-node")
 
-REFRESH_INTERVAL_SECONDS = 60  # TEMP: 60s for testing (prod: 300)
+REFRESH_INTERVAL_SECONDS = 300  # 5 minutes
 
 _storage = JarvisStorage("calendar_alerts")
 
