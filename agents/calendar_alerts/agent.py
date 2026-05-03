@@ -70,15 +70,15 @@ class CalendarAlertAgent(IJarvisAgent):
         # At least one calendar provider must be configured
         return [
             JarvisSecret(
-                "ICLOUD_USERNAME",
-                "iCloud username for calendar access",
+                "CALENDAR_TYPE",
+                "Type of calendar service (icloud, google)",
                 "integration",
                 "string",
                 required=False,
             ),
             JarvisSecret(
-                "GOOGLE_CALENDAR_CREDENTIALS",
-                "Google Calendar OAuth credentials JSON",
+                "CALENDAR_USERNAME",
+                "Username/Apple ID for calendar service",
                 "integration",
                 "string",
                 required=False,
@@ -86,12 +86,12 @@ class CalendarAlertAgent(IJarvisAgent):
         ]
 
     def validate_secrets(self) -> List[str]:
-        """Override: at least one calendar provider must be configured."""
-        has_icloud = bool(_storage.get_secret("ICLOUD_USERNAME"))
-        has_google = bool(_storage.get_secret("GOOGLE_CALENDAR_CREDENTIALS"))
+        """Override: calendar credentials must be configured."""
+        has_username = bool(_storage.get_secret("CALENDAR_USERNAME"))
+        has_google = bool(_storage.get_secret("GOOGLE_ACCESS_TOKEN"))
 
-        if not has_icloud and not has_google:
-            return ["ICLOUD_USERNAME or GOOGLE_CALENDAR_CREDENTIALS"]
+        if not has_username and not has_google:
+            return ["CALENDAR_USERNAME or GOOGLE_ACCESS_TOKEN"]
         return []
 
     @property
