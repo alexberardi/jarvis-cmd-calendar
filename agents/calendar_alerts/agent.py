@@ -49,6 +49,10 @@ class CalendarAlertAgent(IJarvisAgent):
     def __init__(self) -> None:
         self._alerts: List[Alert] = []
         self._alerted_event_keys: set[str] = set()  # track already-alerted events
+        # Reuse the same command instance across runs so the iCloud/Google
+        # service it caches survives, instead of doing a full re-auth every
+        # 5 minutes.
+        self._cmd: Any = None
 
     @property
     def name(self) -> str:
@@ -101,12 +105,13 @@ class CalendarAlertAgent(IJarvisAgent):
     async def run(self) -> None:
         """Fetch today's calendar events, generate alerts, and inject into CC memory."""
         try:
-            try:
-                from commands.get_calendar_events.command import ReadCalendarCommand
-            except ImportError:
-                from commands.custom_commands.get_calendar_events.command import ReadCalendarCommand
+            if self._cmd is None:
+                try:
+                    from commands.get_calendar_events.command import ReadCalendarCommand
+                except ImportError:
+                    from commands.custom_commands.get_calendar_events.command import ReadCalendarCommand
+                self._cmd = ReadCalendarCommand()
 
-            cmd = ReadCalendarCommand()
             today = datetime.now().strftime("%Y-%m-%d")
 
             request_info = RequestInformation(
@@ -114,7 +119,7 @@ class CalendarAlertAgent(IJarvisAgent):
                 conversation_id="calendar-alert-agent",
             )
 
-            response = cmd.run(
+            response = self._cmd.run(
                 request_info,
                 resolved_datetimes=[today],
             )

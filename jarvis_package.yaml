@@ -1,7 +1,7 @@
 name: "get_calendar_events"
 display_name: "Calendar (iCloud & Google)"
 description: "Read calendar events for today, tomorrow, this weekend, or any date range. Supports iCloud CalDAV and Google Calendar. Includes upcoming event alert agent."
-version: "1.0.0"
+version: "0.1.1"
 min_jarvis_version: "0.9.0"
 license: "MIT"
 author:

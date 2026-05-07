@@ -1,4 +1,4 @@
-from typing import List
+from typing import Any, Callable, List
 
 try:
     from jarvis_log_client import JarvisLogger
@@ -41,6 +41,12 @@ class ReadCalendarCommand(IJarvisCommand):
     def __init__(self) -> None:
         super().__init__()
         self._storage = JarvisStorage("get_calendar_events")
+        # Cache calendar service instances so the underlying httpx.Client and
+        # 1-hour iCloud auth cache survive across calls. Without this, each
+        # call (every 5 min from the agent) created a fresh service, leaked
+        # an httpx.Client, and forced a full CalDAV re-auth.
+        self._cached_service: Any = None
+        self._cached_service_key: tuple[str, ...] | None = None
 
     @property
     def command_name(self) -> str:
@@ -231,11 +237,34 @@ class ReadCalendarCommand(IJarvisCommand):
             self._storage.set_secret("GOOGLE_ACCESS_TOKEN", values["access_token"])
         if "refresh_token" in values:
             self._storage.set_secret("GOOGLE_REFRESH_TOKEN", values["refresh_token"])
+        # Tokens changed — drop the cached service so the next call rebuilds it.
+        self._cached_service = None
+        self._cached_service_key = None
         try:
             from services.command_auth_service import clear_auth_flag
             clear_auth_flag("google_calendar")
         except ImportError:
             pass
+
+    def _get_or_create_service(self, key: tuple[str, ...], factory: Callable[[], Any]) -> Any:
+        """Return a cached calendar service, rebuilding only if `key` changed.
+
+        `key` is a tuple of all inputs that affect the service (creds, calendar
+        name, etc.). When it matches the cached key, the existing service —
+        and its httpx.Client + 1-hour auth cache — is reused.
+        """
+        if self._cached_service is None or self._cached_service_key != key:
+            # Best-effort close on the old client
+            old = self._cached_service
+            close = getattr(getattr(old, "session", None), "close", None) if old else None
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+            self._cached_service = factory()
+            self._cached_service_key = key
+        return self._cached_service
 
     @property
     def critical_rules(self) -> List[str]:
@@ -303,11 +332,14 @@ class ReadCalendarCommand(IJarvisCommand):
                         error_details="Google Calendar not authenticated. Complete OAuth setup first.",
                         context_data={"dates": dates_to_strings(target_dates), "events": [], "error": "Not authenticated"},
                     )
-                calendar_service = GoogleCalendarService(
-                    access_token=access_token,
-                    refresh_token=refresh_token or "",
-                    client_id=client_id or "",
-                    calendar_id=default_calendar or "primary",
+                calendar_service = self._get_or_create_service(
+                    ("google", access_token, refresh_token or "", client_id or "", default_calendar or "primary"),
+                    lambda: GoogleCalendarService(
+                        access_token=access_token,
+                        refresh_token=refresh_token or "",
+                        client_id=client_id or "",
+                        calendar_id=default_calendar or "primary",
+                    ),
                 )
             elif calendar_type == "icloud":
                 username = self._storage.get_secret("CALENDAR_USERNAME")
@@ -317,7 +349,10 @@ class ReadCalendarCommand(IJarvisCommand):
                         error_details="Missing iCloud calendar credentials",
                         context_data={"dates": dates_to_strings(target_dates), "events": [], "error": "Missing credentials"},
                     )
-                calendar_service = ICloudCalendarService(username, password, default_calendar or "default")
+                calendar_service = self._get_or_create_service(
+                    ("icloud", str(username), str(password), default_calendar or "default"),
+                    lambda: ICloudCalendarService(username, password, default_calendar or "default"),
+                )
             else:
                 return CommandResponse.error_response(
                     error_details=f"Unsupported calendar type: {calendar_type}",
