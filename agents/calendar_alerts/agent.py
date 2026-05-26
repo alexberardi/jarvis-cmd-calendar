@@ -76,23 +76,30 @@ class CalendarAlertAgent(IJarvisAgent):
             JarvisSecret(
                 "CALENDAR_TYPE",
                 "Type of calendar service (icloud, google)",
-                "integration",
+                "user",
                 "string",
                 required=False,
             ),
             JarvisSecret(
                 "CALENDAR_USERNAME",
                 "Username/Apple ID for calendar service",
-                "integration",
+                "user",
                 "string",
                 required=False,
             ),
         ]
 
     def validate_secrets(self) -> List[str]:
-        """Override: calendar credentials must be configured."""
-        has_username = bool(_storage.get_secret("CALENDAR_USERNAME"))
-        has_google = bool(_storage.get_secret("GOOGLE_ACCESS_TOKEN"))
+        """Override: calendar credentials must be configured.
+
+        Note: these are scope="user" but agents run without a ContextVar
+        user_id, so both reads return None today. The agent therefore reports
+        the credentials as missing and short-circuits its run() loop. Fixing
+        this requires Phase 3 work (designated owner-user or per-user
+        iteration); see project_secret_scopes_and_speaker_rec.md.
+        """
+        has_username = bool(_storage.get_secret("CALENDAR_USERNAME", scope="user"))
+        has_google = bool(_storage.get_secret("GOOGLE_ACCESS_TOKEN", scope="user"))
 
         if not has_username and not has_google:
             return ["CALENDAR_USERNAME or GOOGLE_ACCESS_TOKEN"]

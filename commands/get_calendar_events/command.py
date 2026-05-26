@@ -139,13 +139,13 @@ class ReadCalendarCommand(IJarvisCommand):
     def _get_calendar_type(self) -> str:
         """Read CALENDAR_TYPE from DB, defaulting to 'icloud'."""
         try:
-            value = self._storage.get_secret("CALENDAR_TYPE")
+            value = self._storage.get_secret("CALENDAR_TYPE", scope="user")
             return (value or "icloud").lower()
         except Exception:
             return "icloud"
 
     def _get_client_id(self) -> str:
-        return self._storage.get_secret("GOOGLE_CLIENT_ID") or _DEFAULT_CLIENT_ID
+        return self._storage.get_secret("GOOGLE_CLIENT_ID", scope="integration") or _DEFAULT_CLIENT_ID
 
     @property
     def associated_service(self) -> str:
@@ -187,8 +187,8 @@ class ReadCalendarCommand(IJarvisCommand):
     def required_secrets(self) -> List[IJarvisSecret]:
         cal_type = self._get_calendar_type()
         secrets: list[IJarvisSecret] = [
-            JarvisSecret("CALENDAR_TYPE", "Type of calendar service (icloud, google)", "integration", "string", is_sensitive=False, friendly_name="Calendar Type"),
-            JarvisSecret("CALENDAR_DEFAULT_NAME", "Default calendar name to use", "integration", "string", is_sensitive=False, friendly_name="Default Calendar"),
+            JarvisSecret("CALENDAR_TYPE", "Type of calendar service (icloud, google)", "user", "string", is_sensitive=False, friendly_name="Calendar Type"),
+            JarvisSecret("CALENDAR_DEFAULT_NAME", "Default calendar name to use", "user", "string", is_sensitive=False, friendly_name="Default Calendar"),
         ]
         if cal_type == "google":
             secrets.append(
@@ -196,19 +196,21 @@ class ReadCalendarCommand(IJarvisCommand):
             )
         else:
             secrets.extend([
-                JarvisSecret("CALENDAR_USERNAME", "Username/Apple ID for calendar service", "integration", "string", friendly_name="Username"),
-                JarvisSecret("CALENDAR_PASSWORD", "Password/app-specific password for calendar service", "integration", "string", friendly_name="Password"),
+                JarvisSecret("CALENDAR_USERNAME", "Username/Apple ID for calendar service", "user", "string", friendly_name="Username"),
+                JarvisSecret("CALENDAR_PASSWORD", "Password/app-specific password for calendar service", "user", "string", friendly_name="Password"),
             ])
         return secrets
 
     @property
     def all_possible_secrets(self) -> List[IJarvisSecret]:
         return [
-            JarvisSecret("CALENDAR_TYPE", "Type of calendar service (icloud, google)", "integration", "string", is_sensitive=False, friendly_name="Calendar Type"),
-            JarvisSecret("CALENDAR_DEFAULT_NAME", "Default calendar name to use", "integration", "string", is_sensitive=False, friendly_name="Default Calendar"),
-            JarvisSecret("CALENDAR_USERNAME", "Username/Apple ID for calendar service", "integration", "string", friendly_name="Username"),
-            JarvisSecret("CALENDAR_PASSWORD", "Password/app-specific password for calendar service", "integration", "string", friendly_name="Password"),
+            JarvisSecret("CALENDAR_TYPE", "Type of calendar service (icloud, google)", "user", "string", is_sensitive=False, friendly_name="Calendar Type"),
+            JarvisSecret("CALENDAR_DEFAULT_NAME", "Default calendar name to use", "user", "string", is_sensitive=False, friendly_name="Default Calendar"),
+            JarvisSecret("CALENDAR_USERNAME", "Username/Apple ID for calendar service", "user", "string", friendly_name="Username"),
+            JarvisSecret("CALENDAR_PASSWORD", "Password/app-specific password for calendar service", "user", "string", friendly_name="Password"),
             JarvisSecret("GOOGLE_CLIENT_ID", "Google OAuth client ID (optional — a default is provided)", "integration", "string", required=False, is_sensitive=False, friendly_name="Client ID (optional)"),
+            JarvisSecret("GOOGLE_ACCESS_TOKEN", "Google OAuth access token (auto-populated)", "user", "string", friendly_name="Access Token"),
+            JarvisSecret("GOOGLE_REFRESH_TOKEN", "Google OAuth refresh token (auto-populated)", "user", "string", friendly_name="Refresh Token"),
         ]
 
     @property
@@ -319,13 +321,13 @@ class ReadCalendarCommand(IJarvisCommand):
 
         # Get calendar configuration
         calendar_type = self._get_calendar_type()
-        default_calendar = self._storage.get_secret("CALENDAR_DEFAULT_NAME")
+        default_calendar = self._storage.get_secret("CALENDAR_DEFAULT_NAME", scope="user")
 
         try:
             # Initialize appropriate calendar service
             if calendar_type == "google":
-                access_token = self._storage.get_secret("GOOGLE_ACCESS_TOKEN")
-                refresh_token = self._storage.get_secret("GOOGLE_REFRESH_TOKEN")
+                access_token = self._storage.get_secret("GOOGLE_ACCESS_TOKEN", scope="user")
+                refresh_token = self._storage.get_secret("GOOGLE_REFRESH_TOKEN", scope="user")
                 client_id = self._get_client_id()
                 if not access_token:
                     return CommandResponse.error_response(
@@ -342,8 +344,8 @@ class ReadCalendarCommand(IJarvisCommand):
                     ),
                 )
             elif calendar_type == "icloud":
-                username = self._storage.get_secret("CALENDAR_USERNAME")
-                password = self._storage.get_secret("CALENDAR_PASSWORD")
+                username = self._storage.get_secret("CALENDAR_USERNAME", scope="user")
+                password = self._storage.get_secret("CALENDAR_PASSWORD", scope="user")
                 if not all([username, password]):
                     return CommandResponse.error_response(
                         error_details="Missing iCloud calendar credentials",
