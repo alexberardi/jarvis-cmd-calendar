@@ -17,13 +17,41 @@ from jarvis_command_sdk import (
     CommandExample,
     CommandResponse,
     DateKeys,
+    FastPathPattern,
     IJarvisCommand,
     IJarvisParameter,
     IJarvisSecret,
     JarvisParameter,
     JarvisSecret,
     JarvisStorage,
+    PreRouteResult,
     RequestInformation,
+)
+
+# Date-key resolution for pre-route. The full set of accepted date keys is
+# in DateKeys; we list only the ones a regex can pluck reliably from a
+# spoken utterance — keep this in sync with what run() can resolve.
+_DATE_KEY_BY_PHRASE: dict[str, str] = {
+    "today": DateKeys.TODAY,
+    "tonight": DateKeys.TODAY,
+    "tomorrow": DateKeys.TOMORROW,
+    "tomorrow morning": DateKeys.TOMORROW,
+    "tomorrow afternoon": DateKeys.TOMORROW,
+    "tomorrow evening": DateKeys.TOMORROW,
+    "tomorrow night": DateKeys.TOMORROW,
+    "day after tomorrow": DateKeys.DAY_AFTER_TOMORROW,
+    "the day after tomorrow": DateKeys.DAY_AFTER_TOMORROW,
+    "this weekend": DateKeys.THIS_WEEKEND,
+    "the weekend": DateKeys.THIS_WEEKEND,
+    "weekend": DateKeys.THIS_WEEKEND,
+    "next week": DateKeys.NEXT_WEEK,
+    "this week": getattr(DateKeys, "THIS_WEEK", "this_week"),
+    "yesterday": getattr(DateKeys, "YESTERDAY", "yesterday"),
+}
+
+# Longest-first so "the day after tomorrow" matches before "tomorrow".
+_DATE_PHRASE_ALT = "|".join(
+    sorted(_DATE_KEY_BY_PHRASE, key=len, reverse=True)
 )
 from calendar_shared.icloud_calendar_service import ICloudCalendarService
 from calendar_shared.google_calendar_service import GoogleCalendarService
@@ -273,6 +301,73 @@ class ReadCalendarCommand(IJarvisCommand):
         return [
             "'day after tomorrow' = single key 'day_after_tomorrow', NOT two separate dates.",
         ]
+
+    # ------------------------------------------------------------------
+    # Fast-path patterns — bypass the LLM for calendar queries whose date
+    # is unambiguous. Implicit "today" is the default for shapes without a
+    # date phrase. All shapes are anchored — we don't want to claim
+    # utterances like "remind me to check my calendar" that mention the
+    # word "calendar" but aren't actually queries.
+    # ------------------------------------------------------------------
+    @property
+    def fast_path_patterns(self) -> List[FastPathPattern]:
+        # Verbs/nouns that unambiguously indicate a calendar query.
+        # Combined here as a single alternation. `appointments` and
+        # `meetings` are bare nouns; the rest wrap verb + noun.
+        calendar_noun = (
+            r"(?:calendar|schedule|appointments?|meetings?|agenda|plans?)"
+        )
+        return [
+            FastPathPattern(
+                id="get_calendar_events.with_date",
+                description="Bypass LLM for 'what's on my calendar <date>' / 'meetings <date>'",
+                example="what's on my calendar tomorrow",
+                regex=(
+                    r"^\s*(?:"
+                    + r"what'?s\s+on\s+my\s+" + calendar_noun
+                    + r"|what\s+(?:meetings?|appointments?)\s+do\s+i\s+have"
+                    + r"|do\s+i\s+have\s+any\s+(?:meetings?|appointments?|plans?)"
+                    + r"|am\s+i\s+busy"
+                    + r"|show\s+(?:me\s+)?my\s+" + calendar_noun
+                    + r"|show\s+my\s+" + calendar_noun
+                    + r"|what'?s\s+my\s+" + calendar_noun
+                    + r"|check\s+my\s+" + calendar_noun
+                    + r")\s+(?:for\s+|on\s+|this\s+)?(?P<date>"
+                    + _DATE_PHRASE_ALT
+                    + r")\s*[?.!]*$"
+                ),
+                handler="_fp_with_date",
+            ),
+            FastPathPattern(
+                id="get_calendar_events.implicit_today",
+                description="Bypass LLM for bare calendar queries (defaults to today)",
+                example="what's on my calendar",
+                regex=(
+                    r"^\s*(?:"
+                    + r"what'?s\s+on\s+my\s+" + calendar_noun
+                    + r"|what\s+(?:meetings?|appointments?)\s+do\s+i\s+have"
+                    + r"|do\s+i\s+have\s+any\s+(?:meetings?|appointments?|plans?)"
+                    + r"|am\s+i\s+busy"
+                    + r"|show\s+(?:me\s+)?my\s+" + calendar_noun
+                    + r"|read\s+my\s+" + calendar_noun
+                    + r"|check\s+my\s+" + calendar_noun
+                    + r"|what'?s\s+my\s+" + calendar_noun
+                    + r"|what\s+are\s+my\s+plans"
+                    + r")\s*[?.!]*$"
+                ),
+                handler="_fp_implicit_today",
+            ),
+        ]
+
+    def _fp_with_date(self, match, voice_command: str) -> PreRouteResult | None:
+        phrase = match.group("date").lower().strip()
+        date_key = _DATE_KEY_BY_PHRASE.get(phrase)
+        if date_key is None:
+            return None
+        return PreRouteResult(arguments={"resolved_datetimes": [date_key]})
+
+    def _fp_implicit_today(self, match, voice_command: str) -> PreRouteResult | None:
+        return PreRouteResult(arguments={"resolved_datetimes": [DateKeys.TODAY]})
 
     def run(self, request_info, **kwargs) -> CommandResponse:
         # Get parameters
