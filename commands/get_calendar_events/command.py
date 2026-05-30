@@ -53,6 +53,35 @@ _DATE_KEY_BY_PHRASE: dict[str, str] = {
 _DATE_PHRASE_ALT = "|".join(
     sorted(_DATE_KEY_BY_PHRASE, key=len, reverse=True)
 )
+
+
+def _compose_calendar_message(events: list[dict], date_display: str) -> str:
+    """Spoken summary used on the pre-route fast path.
+
+    Lists up to the first 4 events with their start time and summary so the
+    user hears a real itinerary instead of a generic count. Falls back to a
+    bare count when there are more than 4.
+    """
+    if not events:
+        return f"You have nothing on your calendar for {date_display}."
+    if len(events) <= 4:
+        parts = []
+        for ev in events:
+            start = ev.get("start_time", "")
+            summary = (ev.get("summary") or "untitled").strip()
+            if start == "All day":
+                parts.append(f"all day, {summary}")
+            elif start:
+                parts.append(f"at {start}, {summary}")
+            else:
+                parts.append(summary)
+        joined = "; ".join(parts)
+        return f"You have {len(events)} event{'s' if len(events) != 1 else ''} on {date_display}: {joined}."
+    summary_titles = ", ".join((ev.get("summary") or "untitled").strip() for ev in events[:3])
+    return (
+        f"You have {len(events)} events on {date_display}, including "
+        f"{summary_titles}, and {len(events) - 3} more."
+    )
 from calendar_shared.icloud_calendar_service import ICloudCalendarService
 from calendar_shared.google_calendar_service import GoogleCalendarService
 from calendar_shared.date_util import parse_date_array, format_date_display, dates_to_strings
@@ -512,36 +541,40 @@ class ReadCalendarCommand(IJarvisCommand):
                 message = f"You have {len(all_events)} event(s) on {date_display}"
                 logger.debug(message)
 
-                return CommandResponse.follow_up_response(
-                                        context_data={
-                        "dates": dates_to_strings(target_dates),
-                        "calendar_type": calendar_type,
-                        "calendar_name": default_calendar or "default",
-                        "events": formatted_events,
-                        "total_events": len(all_events),
-                        "voice_command": voice_command,
-                        "target_dates": dates_to_strings(target_dates),
-                        "date_display": date_display
-                    }
-                )
+                ctx = {
+                    "dates": dates_to_strings(target_dates),
+                    "calendar_type": calendar_type,
+                    "calendar_name": default_calendar or "default",
+                    "events": formatted_events,
+                    "total_events": len(all_events),
+                    "voice_command": voice_command,
+                    "target_dates": dates_to_strings(target_dates),
+                    "date_display": date_display,
+                }
+                # Pre-route callers have no LLM downstream — pre-compose a
+                # spoken summary so the wrapper sees a `message`.
+                if request_info.is_pre_routed:
+                    ctx["message"] = _compose_calendar_message(formatted_events, date_display)
+                return CommandResponse.follow_up_response(context_data=ctx)
             else:
                 # No events found
                 date_display = format_date_display(target_dates)
                 message = f"No events found on {date_display}"
                 logger.debug(message)
 
-                return CommandResponse.follow_up_response(
-                                        context_data={
-                        "dates": dates_to_strings(target_dates),
-                        "calendar_type": calendar_type,
-                        "calendar_name": default_calendar or "default",
-                        "events": [],
-                        "total_events": 0,
-                        "voice_command": voice_command,
-                        "target_dates": dates_to_strings(target_dates),
-                        "date_display": date_display
-                    }
-                )
+                ctx = {
+                    "dates": dates_to_strings(target_dates),
+                    "calendar_type": calendar_type,
+                    "calendar_name": default_calendar or "default",
+                    "events": [],
+                    "total_events": 0,
+                    "voice_command": voice_command,
+                    "target_dates": dates_to_strings(target_dates),
+                    "date_display": date_display,
+                }
+                if request_info.is_pre_routed:
+                    ctx["message"] = f"You have nothing on your calendar for {date_display}."
+                return CommandResponse.follow_up_response(context_data=ctx)
 
         except Exception as e:
             return CommandResponse.error_response(
