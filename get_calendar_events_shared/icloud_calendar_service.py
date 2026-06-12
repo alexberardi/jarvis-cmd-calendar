@@ -16,7 +16,7 @@ except ImportError:
         def error(self, msg, **kw): self._log.error(msg)
         def debug(self, msg, **kw): self._log.debug(msg)
 
-from calendar_shared.date_util import parse_ical_datetime
+from get_calendar_events_shared.date_util import parse_ical_datetime
 
 logger = JarvisLogger(service="jarvis-node")
 

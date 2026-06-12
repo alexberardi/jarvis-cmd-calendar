@@ -26,6 +26,7 @@ from jarvis_command_sdk import (
     JarvisStorage,
     PreRouteResult,
     RequestInformation,
+    get_current_user_id,
 )
 
 # Date-key resolution for pre-route. The full set of accepted date keys is
@@ -82,9 +83,9 @@ def _compose_calendar_message(events: list[dict], date_display: str) -> str:
         f"You have {len(events)} events on {date_display}, including "
         f"{summary_titles}, and {len(events) - 3} more."
     )
-from calendar_shared.icloud_calendar_service import ICloudCalendarService
-from calendar_shared.google_calendar_service import GoogleCalendarService
-from calendar_shared.date_util import parse_date_array, format_date_display, dates_to_strings
+from get_calendar_events_shared.icloud_calendar_service import ICloudCalendarService
+from get_calendar_events_shared.google_calendar_service import GoogleCalendarService
+from get_calendar_events_shared.date_util import parse_date_array, format_date_display, dates_to_strings
 
 logger = JarvisLogger(service="jarvis-node")
 
@@ -291,11 +292,23 @@ class ReadCalendarCommand(IJarvisCommand):
         )
 
     def store_auth_values(self, values: dict[str, str]) -> None:
-        """Store Google OAuth tokens from the mobile OAuth callback."""
+        """Store Google OAuth tokens from the mobile OAuth callback.
+
+        Tokens are user-scoped — the caller (node auth pull / token refresh
+        agent) sets the SDK user ContextVar to the token owner. Without an
+        owner there is no correct row to write, so refuse loudly rather than
+        store tokens nobody can read.
+        """
+        if get_current_user_id() is None:
+            logger.error(
+                "Refusing to store Google calendar tokens: no user in context "
+                "(requires CC with OAuth user threading — update jarvis-command-center)"
+            )
+            return
         if "access_token" in values:
-            self._storage.set_secret("GOOGLE_ACCESS_TOKEN", values["access_token"])
+            self._storage.set_secret("GOOGLE_ACCESS_TOKEN", values["access_token"], scope="user")
         if "refresh_token" in values:
-            self._storage.set_secret("GOOGLE_REFRESH_TOKEN", values["refresh_token"])
+            self._storage.set_secret("GOOGLE_REFRESH_TOKEN", values["refresh_token"], scope="user")
         # Tokens changed — drop the cached service so the next call rebuilds it.
         self._cached_service = None
         self._cached_service_key = None
@@ -415,6 +428,30 @@ class ReadCalendarCommand(IJarvisCommand):
             # Fallback if we can't get the voice command
             voice_command = "unknown command"
             logger.debug(f"WARNING: Could not extract voice_command from request_info: {request_info}")
+
+        # Calendar credentials are user-scoped — without a resolved speaker
+        # every secret read below returns None and the user would hear a
+        # misleading "missing credentials" error. Refuse up front instead
+        # (same pattern as export_shopping_list). The ContextVar fallback
+        # covers callers that set the SDK user context but not request_info.
+        if hasattr(request_info, "user_id"):
+            speaker_user_id = request_info.user_id
+        elif isinstance(request_info, dict):
+            speaker_user_id = request_info.get("user_id")
+        else:
+            speaker_user_id = None
+        if speaker_user_id is None:
+            speaker_user_id = get_current_user_id()
+        if speaker_user_id is None:
+            message = (
+                "I'm not sure whose calendar to check — I couldn't tell who's "
+                "asking. Try training your voice in the app."
+            )
+            logger.warning("get_calendar_events refused: no speaker_user_id")
+            return CommandResponse.error_response(
+                error_details="Unknown speaker — cannot resolve a personal calendar.",
+                context_data={"error": "unknown_speaker", "message": message},
+            )
 
         if not datetimes_array:
             return CommandResponse.error_response(

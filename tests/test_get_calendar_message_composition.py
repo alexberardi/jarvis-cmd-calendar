@@ -8,29 +8,29 @@ import types
 import pytest
 
 
-def _stub_calendar_shared() -> None:
-    if "calendar_shared" in sys.modules:
+def _stub_get_calendar_events_shared() -> None:
+    if "get_calendar_events_shared" in sys.modules:
         return
-    pkg = types.ModuleType("calendar_shared")
-    sys.modules["calendar_shared"] = pkg
+    pkg = types.ModuleType("get_calendar_events_shared")
+    sys.modules["get_calendar_events_shared"] = pkg
 
-    icloud = types.ModuleType("calendar_shared.icloud_calendar_service")
+    icloud = types.ModuleType("get_calendar_events_shared.icloud_calendar_service")
     icloud.ICloudCalendarService = type("ICloudCalendarService", (), {})
-    sys.modules["calendar_shared.icloud_calendar_service"] = icloud
+    sys.modules["get_calendar_events_shared.icloud_calendar_service"] = icloud
 
-    gcal = types.ModuleType("calendar_shared.google_calendar_service")
+    gcal = types.ModuleType("get_calendar_events_shared.google_calendar_service")
     gcal.GoogleCalendarService = type("GoogleCalendarService", (), {})
-    sys.modules["calendar_shared.google_calendar_service"] = gcal
+    sys.modules["get_calendar_events_shared.google_calendar_service"] = gcal
 
-    du = types.ModuleType("calendar_shared.date_util")
+    du = types.ModuleType("get_calendar_events_shared.date_util")
     du.parse_date_array = lambda *a, **k: None
     du.format_date_display = lambda *a, **k: "today"
     du.dates_to_strings = lambda *a, **k: []
-    sys.modules["calendar_shared.date_util"] = du
+    sys.modules["get_calendar_events_shared.date_util"] = du
 
 
 def _load_command():
-    _stub_calendar_shared()
+    _stub_get_calendar_events_shared()
     here = os.path.dirname(os.path.abspath(__file__))
     cmd_path = os.path.join(here, "..", "commands", "get_calendar_events", "command.py")
     spec = importlib.util.spec_from_file_location("cal_msg_test", cmd_path)

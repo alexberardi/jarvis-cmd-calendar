@@ -1,8 +1,11 @@
 name: "get_calendar_events"
 display_name: "Calendar (iCloud & Google)"
 description: "Read calendar events for today, tomorrow, this weekend, or any date range. Supports iCloud CalDAV and Google Calendar. Includes upcoming event alert agent."
-version: "0.1.1"
-min_jarvis_version: "0.9.0"
+version: "0.1.2"
+min_jarvis_version: "0.1.115"
+# Node v0.1.115 is the first release with floor enforcement AND secret
+# value_type "user" (needed for CALENDAR_AGENT_USER); SDK 0.3.4 likewise.
+min_sdk_version: "0.3.4"
 license: "MIT"
 author:
   github: "alexberardi"
@@ -47,3 +50,8 @@ secrets:
     scope: user
     value_type: string
     description: "Google OAuth refresh token (auto-populated)"
+  - key: CALENDAR_AGENT_USER
+    scope: integration
+    value_type: user
+    description: "The household member whose calendar the alert agent watches. Leave unset to watch every member with a configured calendar."
+    is_sensitive: false
