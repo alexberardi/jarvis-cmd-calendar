@@ -588,10 +588,10 @@ class ReadCalendarCommand(IJarvisCommand):
                     "target_dates": dates_to_strings(target_dates),
                     "date_display": date_display,
                 }
-                # Pre-route callers have no LLM downstream — pre-compose a
-                # spoken summary so the wrapper sees a `message`.
-                if request_info.is_pre_routed:
-                    ctx["message"] = _compose_calendar_message(formatted_events, date_display)
+                # Always pre-compose a spoken summary so the command-center
+                # voice fast-path speaks it directly (skipping the formatting
+                # LLM, which otherwise risks generic filler like "Task completed.").
+                ctx["message"] = _compose_calendar_message(formatted_events, date_display)
                 return CommandResponse.follow_up_response(context_data=ctx)
             else:
                 # No events found
@@ -609,8 +609,7 @@ class ReadCalendarCommand(IJarvisCommand):
                     "target_dates": dates_to_strings(target_dates),
                     "date_display": date_display,
                 }
-                if request_info.is_pre_routed:
-                    ctx["message"] = f"You have nothing on your calendar for {date_display}."
+                ctx["message"] = f"You have nothing on your calendar for {date_display}."
                 return CommandResponse.follow_up_response(context_data=ctx)
 
         except Exception as e:
