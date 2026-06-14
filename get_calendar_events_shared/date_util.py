@@ -278,23 +278,15 @@ def format_date_display(target_dates: list) -> str:
     Returns:
         Formatted date string (e.g., "Sunday, August 17" or "August 17 to August 18")
     """
+    # Calendar date display is day-level. The resolved "today"/"tomorrow"
+    # carries a UTC-midnight time (e.g. 04:00Z = midnight EDT) that is NOT a
+    # real event time, so rendering "...at 04:00 AM" is a confusing artifact.
+    # Always show the date only — actual times come from the events themselves.
     if len(target_dates) == 1:
-        dt = target_dates[0]
-        # If it's a specific time (not midnight), include the time
-        if dt.hour != 0 or dt.minute != 0:
-            return dt.strftime("%A, %B %d at %I:%M %p")
-        else:
-            return dt.strftime("%A, %B %d")
-    else:
-        # For multiple dates, show date range
-        start_dt = target_dates[0]
-        end_dt = target_dates[-1]
-
-        # If both have specific times, include them
-        if (start_dt.hour != 0 or start_dt.minute != 0) and (end_dt.hour != 0 or end_dt.minute != 0):
-            return f"{start_dt.strftime('%B %d at %I:%M %p')} to {end_dt.strftime('%B %d at %I:%M %p')}"
-        else:
-            return f"{start_dt.strftime('%B %d')} to {end_dt.strftime('%B %d')}"
+        return target_dates[0].strftime("%A, %B %d")
+    start_dt = target_dates[0]
+    end_dt = target_dates[-1]
+    return f"{start_dt.strftime('%B %d')} to {end_dt.strftime('%B %d')}"
 
 
 def dates_to_strings(target_dates: list) -> list:

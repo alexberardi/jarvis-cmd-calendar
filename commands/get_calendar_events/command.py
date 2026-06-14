@@ -565,8 +565,8 @@ class ReadCalendarCommand(IJarvisCommand):
                     formatted_event = {
                         "id": event.id,
                         "summary": event.summary,
-                        "start_time": event.start_time.strftime("%H:%M") if not event.is_all_day else "All day",
-                        "end_time": event.end_time.strftime("%H:%M") if not event.is_all_day else "All day",
+                        "start_time": event.start_time.strftime("%I:%M %p").lstrip("0") if not event.is_all_day else "All day",
+                        "end_time": event.end_time.strftime("%I:%M %p").lstrip("0") if not event.is_all_day else "All day",
                         "location": event.location,
                         "description": event.description,
                         "is_all_day": event.is_all_day
