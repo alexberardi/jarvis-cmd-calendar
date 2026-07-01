@@ -6,7 +6,7 @@ min_jarvis_version: "0.1.115"
 # Node v0.1.115 is the first release with floor enforcement AND secret
 # value_type "user" (needed for CALENDAR_AGENT_USER); SDK 0.3.4 likewise.
 min_sdk_version: "0.3.4"
-license: "MIT"
+license: Apache-2.0
 author:
   github: "alexberardi"
 categories: ["productivity", "calendar"]
