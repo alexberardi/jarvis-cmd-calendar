@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Callable, List
 
 try:
@@ -16,6 +17,8 @@ from jarvis_command_sdk import (
     AuthenticationConfig,
     CommandExample,
     CommandResponse,
+    ContextOperation,
+    ContextResult,
     DateKeys,
     FastPathPattern,
     IJarvisCommand,
@@ -86,12 +89,17 @@ def _compose_calendar_message(events: list[dict], date_display: str) -> str:
 from get_calendar_events_shared.icloud_calendar_service import ICloudCalendarService
 from get_calendar_events_shared.google_calendar_service import GoogleCalendarService
 from get_calendar_events_shared.date_util import parse_date_array, format_date_display, dates_to_strings
+from get_calendar_events_shared.availability import build_availability
 
 logger = JarvisLogger(service="jarvis-node")
 
 # Default OAuth client ID — same Google Cloud project as Gmail.
 # Users can override via GOOGLE_CLIENT_ID secret if they prefer their own.
 _DEFAULT_CLIENT_ID = "683175564329-24fi9h6hck48hfrbjhb24vf12680e5ec.apps.googleusercontent.com"
+
+
+class CalendarConfigurationError(RuntimeError):
+    """Calendar isn't usable for this speaker (unauthenticated / misconfigured)."""
 
 
 class ReadCalendarCommand(IJarvisCommand):
@@ -193,6 +201,106 @@ class ReadCalendarCommand(IJarvisCommand):
         return [
             JarvisParameter("resolved_datetimes", "array<datetime>", description="Date keys like 'today', 'tomorrow', 'yesterday', 'this_weekend', 'next_week', etc. The server resolves these to actual dates.", required=True)
         ]
+
+    # ── Context provider (plan-time availability) ─────────────────────────
+    #
+    # A server-side planner (the phone-call plan-draft step) asks for these
+    # BEFORE acting, so a call brief can carry the user's real constraint
+    # envelope. Read-only, plan-time only — never a live tool inside a call.
+
+    @property
+    def context_operations(self) -> list[ContextOperation]:
+        return [
+            ContextOperation(
+                name="availability",
+                description=(
+                    "Free/busy windows from the speaker's calendar over a "
+                    "date range, for scheduling on their behalf."
+                ),
+                params_schema={
+                    "start": {
+                        "type": "string",
+                        "required": True,
+                        "description": "Range start, ISO date (YYYY-MM-DD)",
+                    },
+                    "end": {
+                        "type": "string",
+                        "required": True,
+                        "description": "Range end, ISO date (exclusive)",
+                    },
+                },
+            )
+        ]
+
+    def execute_context_operation(self, operation: str, params: dict) -> ContextResult:
+        if operation != "availability":
+            return ContextResult.failed(f"unsupported context operation '{operation}'")
+
+        try:
+            start = datetime.strptime(str(params["start"]), "%Y-%m-%d")
+            end = datetime.strptime(str(params["end"]), "%Y-%m-%d")
+        except (KeyError, ValueError) as exc:
+            return ContextResult.failed(f"invalid date range: {exc}")
+
+        days = max((end - start).days, 1)
+
+        # Same user-scoping refusal as run(): credentials are per-speaker, so
+        # without a resolved user every secret read returns None and we would
+        # report "missing credentials" for what is really an identity gap.
+        if get_current_user_id() is None:
+            return ContextResult.failed("unknown speaker — no personal calendar")
+
+        try:
+            service = self._build_calendar_service()
+        except CalendarConfigurationError as exc:
+            return ContextResult.failed(str(exc))
+
+        try:
+            events = service.read_events(start, days)
+        except Exception as exc:  # noqa: BLE001 — upstream flakiness is data
+            logger.warning(f"availability read_events failed: {exc}")
+            return ContextResult.failed(f"calendar unreachable: {exc}")
+
+        return ContextResult(data=build_availability(events, start, days))
+
+    def _build_calendar_service(self):
+        """Construct the configured calendar service or raise.
+
+        Mirrors run()'s provider selection; extracted so the context op and
+        the voice path can never drift on credentials or caching.
+        """
+        calendar_type = self._get_calendar_type()
+        default_calendar = self._storage.get_secret("CALENDAR_DEFAULT_NAME", scope="user")
+
+        if calendar_type == "google":
+            access_token = self._storage.get_secret("GOOGLE_ACCESS_TOKEN", scope="user")
+            refresh_token = self._storage.get_secret("GOOGLE_REFRESH_TOKEN", scope="user")
+            client_id = self._get_client_id()
+            if not access_token:
+                raise CalendarConfigurationError(
+                    "Google Calendar not authenticated. Complete OAuth setup first."
+                )
+            return self._get_or_create_service(
+                ("google", access_token, refresh_token or "", client_id or "", default_calendar or "primary"),
+                lambda: GoogleCalendarService(
+                    access_token=access_token,
+                    refresh_token=refresh_token or "",
+                    client_id=client_id or "",
+                    calendar_id=default_calendar or "primary",
+                ),
+            )
+
+        if calendar_type == "icloud":
+            username = self._storage.get_secret("CALENDAR_USERNAME", scope="user")
+            password = self._storage.get_secret("CALENDAR_PASSWORD", scope="user")
+            if not all([username, password]):
+                raise CalendarConfigurationError("Missing iCloud calendar credentials")
+            return self._get_or_create_service(
+                ("icloud", str(username), str(password), default_calendar or "default"),
+                lambda: ICloudCalendarService(username, password, default_calendar or "default"),
+            )
+
+        raise CalendarConfigurationError(f"Unsupported calendar type: {calendar_type}")
 
     def _get_calendar_type(self) -> str:
         """Read CALENDAR_TYPE from DB, defaulting to 'icloud'."""
@@ -480,46 +588,21 @@ class ReadCalendarCommand(IJarvisCommand):
         # Log the original voice command for debugging
         logger.debug(f"Voice command received: '{voice_command}'")
 
-        # Get calendar configuration
-        calendar_type = self._get_calendar_type()
-        default_calendar = self._storage.get_secret("CALENDAR_DEFAULT_NAME", scope="user")
+        calendar_type = self._get_calendar_type()  # reported in context_data below
 
         try:
-            # Initialize appropriate calendar service
-            if calendar_type == "google":
-                access_token = self._storage.get_secret("GOOGLE_ACCESS_TOKEN", scope="user")
-                refresh_token = self._storage.get_secret("GOOGLE_REFRESH_TOKEN", scope="user")
-                client_id = self._get_client_id()
-                if not access_token:
-                    return CommandResponse.error_response(
-                        error_details="Google Calendar not authenticated. Complete OAuth setup first.",
-                        context_data={"dates": dates_to_strings(target_dates), "events": [], "error": "Not authenticated"},
-                    )
-                calendar_service = self._get_or_create_service(
-                    ("google", access_token, refresh_token or "", client_id or "", default_calendar or "primary"),
-                    lambda: GoogleCalendarService(
-                        access_token=access_token,
-                        refresh_token=refresh_token or "",
-                        client_id=client_id or "",
-                        calendar_id=default_calendar or "primary",
-                    ),
-                )
-            elif calendar_type == "icloud":
-                username = self._storage.get_secret("CALENDAR_USERNAME", scope="user")
-                password = self._storage.get_secret("CALENDAR_PASSWORD", scope="user")
-                if not all([username, password]):
-                    return CommandResponse.error_response(
-                        error_details="Missing iCloud calendar credentials",
-                        context_data={"dates": dates_to_strings(target_dates), "events": [], "error": "Missing credentials"},
-                    )
-                calendar_service = self._get_or_create_service(
-                    ("icloud", str(username), str(password), default_calendar or "default"),
-                    lambda: ICloudCalendarService(username, password, default_calendar or "default"),
-                )
-            else:
+            # Initialize appropriate calendar service. Shared with the
+            # availability context op so credentials/caching can't drift.
+            try:
+                calendar_service = self._build_calendar_service()
+            except CalendarConfigurationError as exc:
                 return CommandResponse.error_response(
-                    error_details=f"Unsupported calendar type: {calendar_type}",
-                    context_data={"dates": dates_to_strings(target_dates), "events": [], "error": f"Unsupported calendar type: {calendar_type}"},
+                    error_details=str(exc),
+                    context_data={
+                        "dates": dates_to_strings(target_dates),
+                        "events": [],
+                        "error": str(exc),
+                    },
                 )
 
             # Collect events based on whether we have specific dates or are using the default
