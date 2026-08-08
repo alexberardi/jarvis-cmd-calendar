@@ -284,7 +284,15 @@ class ReadCalendarCommand(IJarvisCommand):
             keys=["access_token", "refresh_token"],
             authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
             exchange_url="https://oauth2.googleapis.com/token",
-            scopes=["https://www.googleapis.com/auth/calendar.readonly"],
+            # readonly keeps get_calendar_events working; calendar.events is the
+            # write grant the add_event command needs. NOTE: users who
+            # authenticated before this scope was added must RE-CONSENT — an old
+            # read-only token will 401 on writes (GoogleCalendarService flags
+            # re-auth so the mobile app re-prompts).
+            scopes=[
+                "https://www.googleapis.com/auth/calendar.readonly",
+                "https://www.googleapis.com/auth/calendar.events",
+            ],
             supports_pkce=True,
             extra_authorize_params={"access_type": "offline", "prompt": "consent"},
             requires_background_refresh=True,

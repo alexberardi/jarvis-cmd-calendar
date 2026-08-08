@@ -92,6 +92,67 @@ class GoogleCalendarService:
             logger.error("Google Calendar request failed", error=str(e))
             return []
 
+    def create_event(self, event_data: dict) -> bool:
+        """Create an event on Google Calendar via the v3 API.
+
+        Mirrors ICloudCalendarService.add_event's contract — same event_data
+        keys (``summary``, ``start_time``, ``end_time``, optional ``location`` /
+        ``description``) — so the add_event command can call either backend with
+        one mapped dict.
+
+        NOTE (write scope / re-consent): this needs the
+        ``https://www.googleapis.com/auth/calendar.events`` OAuth scope. The read
+        command previously requested only ``calendar.readonly``; users who
+        authenticated before the scope bump must re-consent before writes
+        succeed (a stale read-only token 401s here → _flag_reauth).
+
+        TODO: naive datetimes serialize without an offset; if a household reports
+        events landing in the wrong timezone, thread a "timeZone" field through
+        from the caller. iCloud (the primary backend) is unaffected.
+
+        Returns True on 200/201.
+        """
+        start_time = event_data.get("start_time")
+        end_time = event_data.get("end_time")
+        if start_time is None:
+            logger.error("Google Calendar create_event missing start_time")
+            return False
+        if end_time is None:
+            end_time = start_time + timedelta(hours=1)
+
+        body: dict = {
+            "summary": event_data.get("summary", "New Event"),
+            "start": {"dateTime": start_time.isoformat()},
+            "end": {"dateTime": end_time.isoformat()},
+        }
+        if event_data.get("location"):
+            body["location"] = event_data["location"]
+        if event_data.get("description"):
+            body["description"] = event_data["description"]
+
+        try:
+            response = httpx.post(
+                f"{BASE_URL}/calendars/{self.calendar_id}/events",
+                json=body,
+                headers={"Authorization": f"Bearer {self.access_token}"},
+                timeout=15.0,
+            )
+
+            if response.status_code == 401:
+                logger.warning("Google Calendar returned 401 on create — flagging re-auth")
+                self._flag_reauth()
+                return False
+
+            response.raise_for_status()
+            return response.status_code in (200, 201)
+
+        except httpx.HTTPStatusError as e:
+            logger.error("Google Calendar create_event API error", status_code=e.response.status_code, detail=str(e))
+            return False
+        except Exception as e:
+            logger.error("Google Calendar create_event failed", error=str(e))
+            return False
+
     def _parse_events(self, items: list[dict]) -> List[CalendarEvent]:
         """Convert Google Calendar API items to CalendarEvent objects."""
         events: list[CalendarEvent] = []
