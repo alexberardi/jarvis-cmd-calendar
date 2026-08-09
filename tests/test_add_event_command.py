@@ -213,6 +213,33 @@ def test_create_event_writes_to_icloud_with_mapped_keys(backend):
     assert "title" not in event_data  # proves the mapping happened
 
 
+def test_end_defaults_to_one_hour_when_equal_or_missing(backend):
+    """A missing end — or one that echoes start (the extractor's zero-length
+    quirk) — becomes a 1-hour event, like a normal calendar default."""
+    from datetime import timedelta
+    from jarvis_command_sdk import set_current_user_id
+
+    cmd_mod = _load_add_event_command()
+    cmd = cmd_mod.AddEventCommand()
+    _configure_icloud(backend, 1)
+    request_info = SimpleNamespace(voice_command="add dentist", user_id=1)
+
+    def _end_time_for(end_value, key):
+        data = {"title": "Dentist", "start": "2026-08-11T18:00:00", "idempotency_key": key}
+        if end_value is not None:
+            data["end"] = end_value
+        set_current_user_id(1)
+        try:
+            cmd.create_event(data, request_info)
+        finally:
+            set_current_user_id(None)
+        return _FakeICloudService.instances[-1].added[-1]["end_time"]
+
+    expected = datetime(2026, 8, 11, 18, 0, 0) + timedelta(hours=1)
+    assert _end_time_for("2026-08-11T18:00:00", "eq-1") == expected  # end == start
+    assert _end_time_for(None, "miss-1") == expected  # end omitted
+
+
 # ---------------------------------------------------------------------------
 # (b) idempotency
 # ---------------------------------------------------------------------------

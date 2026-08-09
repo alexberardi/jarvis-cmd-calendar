@@ -268,7 +268,12 @@ class AddEventCommand(IJarvisCommand):
                 context_data={"error": "invalid_params", "added": False, "message": "I need an event title and a start time to add it."},
             )
 
-        end = _parse_dt(data.get("end")) or (start + timedelta(hours=1))
+        end = _parse_dt(data.get("end"))
+        if end is None or end <= start:
+            # No end — or a zero/negative-length one (the extractor sometimes
+            # echoes start as end) — defaults to a 1-hour event, matching typical
+            # calendar behaviour.
+            end = start + timedelta(hours=1)
         location = data.get("location")
         idempotency_key = data.get("idempotency_key")
 
