@@ -555,8 +555,8 @@ PRODID:-//Jarvis//Calendar Service//EN
 BEGIN:VEVENT
 UID:{event_id}
 DTSTAMP:{datetime.now().strftime('%Y%m%dT%H%M%SZ')}
-DTSTART:{event_data.get('start_time', datetime.now()).strftime('%Y%m%dT%H%M%SZ')}
-DTEND:{event_data.get('end_time', datetime.now() + timedelta(hours=1)).strftime('%Y%m%dT%H%M%SZ')}
+DTSTART:{event_data.get('start_time', datetime.now()).strftime('%Y%m%dT%H%M%S')}
+DTEND:{event_data.get('end_time', datetime.now() + timedelta(hours=1)).strftime('%Y%m%dT%H%M%S')}
 SUMMARY:{event_data.get('summary', 'New Event')}
 """
 
