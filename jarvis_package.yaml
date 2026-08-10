@@ -1,11 +1,11 @@
 name: "get_calendar_events"
 display_name: "Calendar (iCloud & Google)"
 description: "Read calendar events for today, tomorrow, this weekend, or any date range. Supports iCloud CalDAV and Google Calendar. Includes upcoming event alert agent."
-version: "0.1.4"
+version: "0.1.5"
 min_jarvis_version: "0.1.115"
 # Node v0.1.115 is the first release with floor enforcement AND secret
 # value_type "user" (needed for CALENDAR_AGENT_USER); SDK 0.3.4 likewise.
-min_sdk_version: "0.3.4"
+min_sdk_version: "0.7.0"
 license: Apache-2.0
 author:
   github: "alexberardi"

@@ -1,6 +1,8 @@
+import uuid
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -457,38 +459,82 @@ class ICloudCalendarService:
         except Exception as e:
             return []
 
-    def add_event(self, event_data: Dict[str, Any]) -> bool:
+    def _resolve_collection_url(self) -> Optional[str]:
+        """Resolve the full CalDAV collection URL for ``self.calendar_name``.
+
+        iCloud collections are addressed by a per-account host shard and a UUID
+        collection id under the discovered calendar-home — NOT by
+        ``{base_url}/{username}/calendars/{display_name}`` (that form is rejected
+        with 403). PROPFIND the calendar-home (Depth: 1), match the collection
+        whose displayname is ``self.calendar_name``, and build an absolute URL
+        from its href. Returns a URL ending in '/', or None if unresolved.
         """
-        Add a new calendar event
+        if not self.calendar_home_url:
+            return None
+        query = (
+            '<?xml version="1.0" encoding="utf-8" ?>'
+            '<d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">'
+            '<d:prop><d:resourcetype/><d:displayname/></d:prop></d:propfind>'
+        )
+        try:
+            resp = self.session.request(
+                'PROPFIND', self.calendar_home_url, content=query,
+                headers={'Content-Type': 'application/xml; charset=utf-8', 'Depth': '1'},
+            )
+        except Exception as e:
+            logger.error("iCloud collection PROPFIND failed", error=str(e))
+            return None
+        if resp.status_code not in (200, 207):
+            logger.warning("iCloud collection PROPFIND non-2xx", status=resp.status_code)
+            return None
+        href = self._find_calendar_url(resp.text, self.calendar_name)
+        if not href:
+            logger.warning("iCloud calendar not found by name", calendar_name=self.calendar_name)
+            return None
+        if href.startswith('http'):
+            full = href
+        elif href.startswith('/'):
+            parsed = urlparse(self.calendar_home_url)
+            full = f"{parsed.scheme}://{parsed.netloc}{href}"
+        else:
+            full = self.calendar_home_url.rstrip('/') + '/' + href
+        return full if full.endswith('/') else full + '/'
 
-        Args:
-            event_data: Dictionary containing event details
+    def add_event(self, event_data: Dict[str, Any]) -> bool:
+        """Add a new calendar event. Returns True on success, False otherwise.
 
-        Returns:
-            bool: True if successful, False otherwise
+        Writes to the resolved collection URL (see ``_resolve_collection_url``).
+        The previous naive ``{base_url}/{username}/calendars/{name}/`` form was
+        rejected by iCloud with 403 (wrong host shard + Apple-ID path + display
+        name instead of the collection UUID). Failures are logged rather than
+        silently swallowed.
         """
         if not self._authenticated and not self.authenticate():
+            logger.warning("add_event: not authenticated")
             return False
 
         try:
-            # Build iCal event data
-            event_id = f"event_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            collection_url = self._resolve_collection_url()
+            if not collection_url:
+                return False
 
-            # Create iCal format event
+            # Unique, collision-safe resource id (two events in the same second
+            # must not overwrite each other).
+            event_id = f"jarvis-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
             ical_event = self._create_ical_event(event_id, event_data)
+            put_url = f"{collection_url}{event_id}.ics"
 
-            # POST to calendar
-            calendar_url = f"{self.base_url}/{self.username}/calendars/{self.calendar_name}/{event_id}.ics"
-
-            headers = {
-                'Content-Type': 'text/calendar; charset=utf-8'
-            }
-
-            response = self.session.put(calendar_url, content=ical_event, headers=headers)
-
-            return response.status_code in [200, 201]
+            response = self.session.put(
+                put_url, content=ical_event,
+                headers={'Content-Type': 'text/calendar; charset=utf-8'},
+            )
+            if response.status_code not in (200, 201, 204):
+                logger.warning("add_event PUT failed", status=response.status_code)
+                return False
+            return True
 
         except Exception as e:
+            logger.error("add_event exception", error=str(e))
             return False
 
     def _create_ical_event(self, event_id: str, event_data: Dict[str, Any]) -> str:
@@ -509,8 +555,8 @@ PRODID:-//Jarvis//Calendar Service//EN
 BEGIN:VEVENT
 UID:{event_id}
 DTSTAMP:{datetime.now().strftime('%Y%m%dT%H%M%SZ')}
-DTSTART:{event_data.get('start_time', datetime.now()).strftime('%Y%m%dT%H%M%SZ')}
-DTEND:{event_data.get('end_time', datetime.now() + timedelta(hours=1)).strftime('%Y%m%dT%H%M%SZ')}
+DTSTART:{event_data.get('start_time', datetime.now()).strftime('%Y%m%dT%H%M%S')}
+DTEND:{event_data.get('end_time', datetime.now() + timedelta(hours=1)).strftime('%Y%m%dT%H%M%S')}
 SUMMARY:{event_data.get('summary', 'New Event')}
 """
 
