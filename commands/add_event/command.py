@@ -138,6 +138,13 @@ class AddEventCommand(IJarvisCommand):
             )
         ]
 
+    @property
+    def listening_signal_types(self) -> List[str]:
+        # This command is purpose-built to react to detected-appointment Signals:
+        # command-center's situation matcher highlights add_event when an
+        # "appt.detected" Signal is present (a precision hint, not a gate).
+        return ["appt.detected"]
+
     def generate_prompt_examples(self) -> List[CommandExample]:
         return [
             CommandExample(
