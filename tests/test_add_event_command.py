@@ -297,6 +297,17 @@ def test_get_proposable_actions_exposes_create_event(backend):
     assert {"title", "start", "end", "location", "idempotency_key"} <= param_names
 
 
+def test_listening_signal_types_advertises_appt_detected(backend):
+    cmd_mod = _load_add_event_command()
+    cmd = cmd_mod.AddEventCommand()
+
+    # The command declares it's designed for detected-appointment Signals, and it
+    # rides the standard advertisement (get_command_schema) so the situation
+    # matcher can group it as purpose-built for "appt.detected".
+    assert cmd.listening_signal_types == ["appt.detected"]
+    assert cmd.get_command_schema()["listening_signal_types"] == ["appt.detected"]
+
+
 # ---------------------------------------------------------------------------
 # (d) unknown-speaker refusal
 # ---------------------------------------------------------------------------
