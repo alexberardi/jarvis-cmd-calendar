@@ -32,6 +32,33 @@ from jarvis_command_sdk import (
     get_current_user_id,
 )
 
+
+def _node_local_tz():
+    """The node's local timezone (calendar wall-clock times are local). Returns
+    None off a node / when unresolvable, so callers can degrade gracefully."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        from utils.timezone_util import get_user_timezone
+        return ZoneInfo(get_user_timezone())
+    except Exception:  # noqa: BLE001 — not on a node / tz lookup failed
+        return None
+
+
+def _event_iso(dt, is_all_day) -> str | None:
+    """Absolute, tz-aware ISO-8601 for an event start/end — or None for all-day /
+    missing. Both providers hand us NAIVE LOCAL wall-clock datetimes (iCloud via
+    parse_ical_datetime; Google via _parse_google_datetime, which does
+    ``.replace(tzinfo=None)``), so a bare ``.isoformat()`` would be read as UTC by
+    downstream consumers (reminder.set_at fires at an absolute instant) and land
+    hours off. Attach the node's local timezone so the instant is correct."""
+    if dt is None or is_all_day:
+        return None
+    if getattr(dt, "tzinfo", None) is not None:
+        return dt.isoformat()
+    tz = _node_local_tz()
+    return dt.replace(tzinfo=tz).isoformat() if tz else dt.isoformat()
+
 # Date-key resolution for pre-route. The full set of accepted date keys is
 # in DateKeys; we list only the ones a regex can pluck reliably from a
 # spoken utterance — keep this in sync with what run() can resolve.
@@ -663,6 +690,11 @@ class ReadCalendarCommand(IJarvisCommand):
                         "summary": event.summary,
                         "start_time": event.start_time.strftime("%I:%M %p").lstrip("0") if not event.is_all_day else "All day",
                         "end_time": event.end_time.strftime("%I:%M %p").lstrip("0") if not event.is_all_day else "All day",
+                        # Absolute tz-aware instants for consumers that need a real
+                        # datetime (calendar_alerts appt.upcoming, leave-by). Additive:
+                        # the voice fast-path ignores these keys.
+                        "start_iso": _event_iso(event.start_time, event.is_all_day),
+                        "end_iso": _event_iso(event.end_time, event.is_all_day),
                         "location": event.location,
                         "description": event.description,
                         "is_all_day": event.is_all_day
