@@ -597,6 +597,11 @@ class ReadCalendarCommand(IJarvisCommand):
         logger.debug(f"Voice command received: '{voice_command}'")
 
         calendar_type = self._get_calendar_type()  # reported in context_data below
+        # The default calendar name is user-scoped and read locally in
+        # _build_calendar_service; re-read it here so this method's response
+        # builder ("calendar_name": default_calendar) can reference it. Without
+        # this it was a NameError that failed EVERY calendar read on a valid date.
+        default_calendar = self._storage.get_secret("CALENDAR_DEFAULT_NAME", scope="user")
 
         try:
             # Initialize appropriate calendar service. Shared with the
