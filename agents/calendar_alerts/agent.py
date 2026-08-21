@@ -35,6 +35,7 @@ from jarvis_command_sdk import (
     IJarvisAgent,
     IJarvisSecret,
     JarvisSecret,
+    JarvisSignals,
     JarvisStorage,
     RequestInformation,
     set_current_user_id,
@@ -50,6 +51,12 @@ logger = JarvisLogger(service="jarvis-node")
 REFRESH_INTERVAL_SECONDS = 300  # 5 minutes
 MAX_USERS_PER_RUN = 5
 
+# Lead window for both the alert path and the appt.upcoming signal. Leave-by needs
+# more runway than a bare "starting soon" alert, so events are surfaced up to this
+# far ahead — enough for the CC bridge to compute drive time and propose a
+# leave-on-time reminder card while there's still time to act.
+MAX_LEAD_MINUTES = 120
+
 _storage = JarvisStorage("calendar_alerts")
 
 
@@ -62,6 +69,10 @@ class CalendarAlertAgent(IJarvisAgent):
         # run once the event is well past, so recurring events (same title,
         # later instance) can alert again and the map can't grow unbounded.
         self._alerted_event_keys: dict[str, datetime] = {}
+        # Already-emitted appt.upcoming signals: source_key -> event start time.
+        # CC upserts on source_key so a re-emit is harmless, but this avoids a
+        # needless POST every 5-min cycle. Pruned alongside the alert keys.
+        self._emitted_appt_keys: dict[str, datetime] = {}
         # One command instance per user, reused across runs so each user's
         # cached iCloud/Google service survives, instead of doing a full
         # re-auth every 5 minutes.
@@ -157,13 +168,25 @@ class CalendarAlertAgent(IJarvisAgent):
                 except Exception:
                     pass
 
+    def _local_tz(self):
+        """The node's local timezone — calendar wall-clock times are local."""
+        try:
+            from zoneinfo import ZoneInfo
+
+            from utils.timezone_util import get_user_timezone
+            return ZoneInfo(get_user_timezone())
+        except Exception:  # noqa: BLE001 — fall back to UTC if unavailable
+            return timezone.utc
+
     def _prune_alerted_keys(self, now: datetime) -> None:
         """Forget dedup keys for events that started over 2 hours ago — far
-        outside the 60-minute alert window, so the next instance of a
-        recurring event alerts again."""
+        outside the lead window, so the next instance of a recurring event
+        alerts (and re-emits its signal) again."""
         cutoff = now - timedelta(hours=2)
         for key in [k for k, start in self._alerted_event_keys.items() if start < cutoff]:
             del self._alerted_event_keys[key]
+        for key in [k for k, start in self._emitted_appt_keys.items() if start < cutoff]:
+            del self._emitted_appt_keys[key]
 
     def _run_for_user(self, uid: int, today: str, now: datetime) -> None:
         """One user's fetch + alerts + memory injection. Raises on failure —
@@ -221,30 +244,112 @@ class CalendarAlertAgent(IJarvisAgent):
             finally:
                 set_current_user_id(None)
 
-    def _process_event(self, event: Dict[str, Any], now: datetime, uid: int) -> None:
-        """Generate an alert if an event is within the alert window."""
+    def _parse_start(self, event: Dict[str, Any]) -> "datetime | None":
+        """Event start as a tz-aware UTC datetime. Prefer the command's absolute
+        ``start_iso`` (tz-aware); fall back to a legacy ``start_time`` string —
+        ISO or a bare display time ("6:45 PM") interpreted in the node local tz —
+        for older command builds. (The old ISO-only parse silently dropped every
+        event when the command emitted a display string.)"""
+        iso = event.get("start_iso")
+        if isinstance(iso, str) and iso.strip():
+            try:
+                dt = datetime.fromisoformat(iso.strip().replace("Z", "+00:00"))
+                return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                pass
         start_str = event.get("start_time") or event.get("start")
-        title = event.get("title") or event.get("summary", "Untitled event")
+        if not isinstance(start_str, str) or not start_str.strip():
+            return None
+        s = start_str.strip()
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            pass
+        tz = self._local_tz()
+        for fmt in ("%I:%M %p", "%I:%M%p", "%I %p", "%H:%M"):
+            try:
+                t = datetime.strptime(s, fmt).time()
+            except ValueError:
+                continue
+            d = datetime.now(tz).date()
+            return datetime(d.year, d.month, d.day, t.hour, t.minute,
+                            tzinfo=tz).astimezone(timezone.utc)
+        return None
 
-        if not start_str:
+    def _maybe_emit_appt_upcoming(
+        self, event: Dict[str, Any], event_start: datetime,
+        minutes_until: float, uid: int,
+    ) -> None:
+        """Emit an ``appt.upcoming`` Signal for a located, timed event so the CC
+        leave-by bridge can compute drive time and propose a leave-on-time card.
+        Only for events with a real place + absolute start, inside the lead window.
+        The propose/skip JUDGMENT lives server-side — this just reports the fact."""
+        location = (event.get("location") or "").strip()
+        if not location or event.get("is_all_day", False):
+            return
+        if not (0 < minutes_until <= MAX_LEAD_MINUTES):
             return
 
+        title = event.get("title") or event.get("summary", "Untitled event")
+        event_id = str(event.get("id") or title)
+        source_key = f"appt:{uid}:{event_id}"
+        # Dedup on (event, start): a RESCHEDULE (same id, new start) must re-emit so
+        # CC upserts the corrected start_iso and the bridge recomputes drive time
+        # against the right instant — a bare membership check would suppress it.
+        if self._emitted_appt_keys.get(source_key) == event_start:
+            return
+
+        # Prefer the command's authoritative tz-aware ISO; fall back to the parsed
+        # instant (UTC). Both are absolute, so the reminder fires correctly.
+        iso = event.get("start_iso")
+        start_iso = iso if isinstance(iso, str) and iso.strip() else event_start.isoformat()
+        start_display = event_start.astimezone(self._local_tz()).strftime("%I:%M %p").lstrip("0")
+
         try:
-            # Parse ISO format
-            if isinstance(start_str, str):
-                start_str = start_str.replace("Z", "+00:00")
-                event_start = datetime.fromisoformat(start_str)
-                if event_start.tzinfo is None:
-                    event_start = event_start.replace(tzinfo=timezone.utc)
+            tag = JarvisSignals("calendar_alerts").emit(
+                kind="appt.upcoming",
+                source_key=source_key,
+                summary=f"Upcoming: {title} at {start_display}",
+                facts={
+                    "title": title,
+                    "location": location,
+                    "start_iso": start_iso,
+                    "start_display": start_display,
+                    "event_id": event_id,
+                },
+                scope={"user_id": uid},
+                ttl_seconds=max(300, int(minutes_until * 60) + 300),
+                cacheable=False,
+            )
+            if tag in ("ok", "no_backend"):
+                # Dedup only once it's accepted (or there's no backend, i.e. tests);
+                # a transient http_error stays un-recorded so the next run retries.
+                self._emitted_appt_keys[source_key] = event_start
             else:
-                return
-        except (ValueError, TypeError):
+                logger.warning("appt.upcoming emit returned tag", tag=tag, title=title)
+        except Exception as e:  # noqa: BLE001 — a failed emit must not break the run
+            logger.warning("appt.upcoming emit failed", error=str(e))
+
+    def _process_event(self, event: Dict[str, Any], now: datetime, uid: int) -> None:
+        """Emit the leave-by signal (≤120 min) and generate a proximity alert
+        (≤60 min) for an event."""
+        title = event.get("title") or event.get("summary", "Untitled event")
+
+        event_start = self._parse_start(event)
+        if event_start is None:
             return
 
         minutes_until = (event_start - now).total_seconds() / 60
+        if minutes_until < 0 or minutes_until > MAX_LEAD_MINUTES:
+            return
 
-        # Only alert for future events within 60 minutes
-        if minutes_until < 0 or minutes_until > 60:
+        # Leave-by: surface located, timed events up to the full lead window so the
+        # CC bridge has runway to compute drive time before departure.
+        self._maybe_emit_appt_upcoming(event, event_start, minutes_until, uid)
+
+        # Time-proximity alerts keep their tighter ≤60-min window (unchanged UX).
+        if minutes_until > 60:
             return
 
         # Dedup: don't re-alert for the same event at the same proximity

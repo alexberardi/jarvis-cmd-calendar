@@ -29,6 +29,17 @@ logger = JarvisLogger(service="jarvis-node")
 BASE_URL = "https://www.googleapis.com/calendar/v3"
 
 
+def _node_local_tz():
+    """The node's local timezone, or None off a node / when unresolvable."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        from utils.timezone_util import get_user_timezone
+        return ZoneInfo(get_user_timezone())
+    except Exception:  # noqa: BLE001 — not on a node / tz lookup failed
+        return None
+
+
 class GoogleCalendarService:
     """REST client for Google Calendar v3 API."""
 
@@ -189,20 +200,32 @@ class GoogleCalendarService:
 
     @staticmethod
     def _parse_google_datetime(dt_str: str) -> datetime | None:
-        """Parse an RFC 3339 datetime string from Google Calendar."""
+        """Parse an RFC 3339 datetime from Google to the node's LOCAL wall-clock
+        (NAIVE).
+
+        Google encodes the true instant with an offset ("...-07:00") or as UTC
+        ("...Z"). We parse that instant, convert it to the node's local timezone,
+        and drop tzinfo — so the rest of the calendar stack (which assumes
+        naive == local wall-clock) and the command's ``_event_iso`` tz-attach yield
+        the CORRECT absolute time. The old ``.replace(tzinfo=None)`` kept the raw
+        wall-clock (UTC for a "Z" event, or a foreign offset for a cross-tz event),
+        which ``_event_iso`` then mis-stamped with the node tz → the leave-by
+        reminder fired hours off.
+        """
         if not dt_str:
             return None
-        # Google returns e.g. "2026-03-10T09:00:00-07:00"
-        # Strip the colon in timezone offset for %z parsing
-        if dt_str[-3] == ":" and (dt_str[-6] == "+" or dt_str[-6] == "-"):
+        # Strip the colon in a "+HH:MM"/"-HH:MM" offset for %z ("Z" parses directly).
+        if len(dt_str) >= 6 and dt_str[-3] == ":" and dt_str[-6] in "+-":
             dt_str = dt_str[:-3] + dt_str[-2:]
         try:
-            return datetime.strptime(dt_str, "%Y-%m-%dT%H:%M:%S%z").replace(tzinfo=None)
+            aware = datetime.strptime(dt_str, "%Y-%m-%dT%H:%M:%S%z")
         except ValueError:
-            try:
-                return datetime.strptime(dt_str, "%Y-%m-%dT%H:%M:%SZ")
-            except ValueError:
-                return None
+            return None
+        local = _node_local_tz()
+        if local is not None:
+            return aware.astimezone(local).replace(tzinfo=None)
+        # Node tz unresolvable (non-node / tests): keep the instant's own wall-clock.
+        return aware.replace(tzinfo=None)
 
     @staticmethod
     def _flag_reauth() -> None:
