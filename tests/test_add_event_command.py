@@ -58,26 +58,32 @@ def _load_real(name: str, *parts: str):
 
 
 def _install_get_calendar_events_shared() -> None:
-    """Stub the shared service/date submodules (idempotent — skips when the
-    package is already present, matching the sibling test files)."""
+    """Stub the shared service/date submodules, each only if missing.
+
+    Checked per submodule, not per package: another test module may already
+    have imported the real package (e.g. for ``availability``) without these
+    submodules, so a package-level guard would skip them all.
+    """
     _stub_log_client()
     if "get_calendar_events_shared" not in sys.modules:
-        pkg = types.ModuleType("get_calendar_events_shared")
-        sys.modules["get_calendar_events_shared"] = pkg
-
-        icloud = types.ModuleType("get_calendar_events_shared.icloud_calendar_service")
-        icloud.ICloudCalendarService = type("ICloudCalendarService", (), {})
-        sys.modules["get_calendar_events_shared.icloud_calendar_service"] = icloud
-
-        gcal = types.ModuleType("get_calendar_events_shared.google_calendar_service")
-        gcal.GoogleCalendarService = type("GoogleCalendarService", (), {})
-        sys.modules["get_calendar_events_shared.google_calendar_service"] = gcal
-
-        du = types.ModuleType("get_calendar_events_shared.date_util")
-        du.parse_date_array = lambda keys: [datetime.now() for _ in keys]
-        du.format_date_display = lambda *a, **k: "today"
-        du.dates_to_strings = lambda dates: []
-        sys.modules["get_calendar_events_shared.date_util"] = du
+        sys.modules["get_calendar_events_shared"] = types.ModuleType(
+            "get_calendar_events_shared"
+        )
+    for sub, attrs in {
+        "icloud_calendar_service": {"ICloudCalendarService": type("ICloudCalendarService", (), {})},
+        "google_calendar_service": {"GoogleCalendarService": type("GoogleCalendarService", (), {})},
+        "date_util": {
+            "parse_date_array": lambda keys: [datetime.now() for _ in keys],
+            "format_date_display": lambda *a, **k: "today",
+            "dates_to_strings": lambda dates: [],
+        },
+    }.items():
+        mod_name = f"get_calendar_events_shared.{sub}"
+        if mod_name not in sys.modules:
+            m = types.ModuleType(mod_name)
+            for k, v in attrs.items():
+                setattr(m, k, v)
+            sys.modules[mod_name] = m
 
 
 class _FakeICloudService:
