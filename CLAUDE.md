@@ -2,7 +2,7 @@
 
 ## Loop (agents)
 
-**Calendar (iCloud & Google)**: Read calendar events for today, tomorrow, this weekend, or any date range. A Jarvis package () that nodes install through Pantry.
+**Calendar (iCloud & Google)**: Read calendar events for today, tomorrow, this weekend, or any date range. A Jarvis package (agent, command) that nodes install through Pantry.
 
 **Verify** (what CI runs: `.github/workflows/ci.yml` calls the toolkit's reusable `package-ci.yml`):
 
