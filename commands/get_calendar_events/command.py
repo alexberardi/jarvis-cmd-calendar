@@ -236,6 +236,12 @@ class ReadCalendarCommand(IJarvisCommand):
     # envelope. Read-only, plan-time only — never a live tool inside a call.
 
     @property
+    def call_context_description(self) -> str:
+        """What the calendar shares with phone call plans, for the user (the app shows it under
+        the command's "Share with phone calls" switch, and the plan card names it)."""
+        return "Your free and busy times for the next week, so Jarvis only books slots that fit"
+
+    @property
     def context_operations(self) -> list[ContextOperation]:
         return [
             ContextOperation(
