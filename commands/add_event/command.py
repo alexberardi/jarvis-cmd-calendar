@@ -84,6 +84,14 @@ def _parse_dt(value: Any) -> datetime | None:
         return None
 
 
+# When the post-call model may offer "Add to Calendar": something the person will attend, not a
+# pickup or an order (the reminder covers those).
+OFFER_AFTER_CALLS = (
+    "the call booked an appointment, reservation or visit that the person will attend at a "
+    "specific date and time (not an order or a pickup)"
+)
+
+
 class AddEventCommand(IJarvisCommand):
 
     def __init__(self) -> None:
@@ -126,15 +134,22 @@ class AddEventCommand(IJarvisCommand):
         # Opt create_event in to being surfaced by ANY agent as a confirm card.
         # This declaration IS the capability grant — command-center refuses to
         # dispatch a callback that isn't listed here.
+        # Offered on a phone call's Call finished card too (jarvis-server
+        # docs/cc/phone-followups.md), when the node's SDK knows the field: an older
+        # SDK would reject the keyword and the command would not load at all.
+        after_calls = {}
+        if "offer_after_calls" in getattr(ProposableAction, "__dataclass_fields__", {}):
+            after_calls["offer_after_calls"] = OFFER_AFTER_CALLS
         return [
             ProposableAction(
                 callback="create_event",
                 params=self.parameters,
                 card_title="Add to your calendar?",
-                confirm_label="Add",
+                confirm_label="Add to Calendar",
                 editable=["title", "start", "end", "location"],
                 blast_tier=BlastTier.reversible,
                 idempotency_param="idempotency_key",
+                **after_calls,
             )
         ]
 
