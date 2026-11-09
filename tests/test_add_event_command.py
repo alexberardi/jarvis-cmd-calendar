@@ -296,11 +296,19 @@ def test_get_proposable_actions_exposes_create_event(backend):
     action = actions["create_event"]
     assert action.callback == "create_event"
     assert action.card_title == "Add to your calendar?"
-    assert action.confirm_label == "Add"
+    assert action.confirm_label == "Add to Calendar"
     assert action.idempotency_param == "idempotency_key"
     assert set(action.editable) == {"title", "start", "end", "location"}
     param_names = {p.name for p in action.params}
     assert {"title", "start", "end", "location", "idempotency_key"} <= param_names
+
+
+def test_create_event_is_offered_after_calls(backend):
+    cmd_mod = _load_add_event_command()
+    action = cmd_mod.AddEventCommand().get_proposable_actions()["create_event"]
+    # The SDK this runs against has the field (jarvis-command-sdk#20): set, and on the wire.
+    assert action.offer_after_calls == cmd_mod.OFFER_AFTER_CALLS
+    assert action.to_dict()["offer_after_calls"] == cmd_mod.OFFER_AFTER_CALLS
 
 
 def test_listening_signal_types_advertises_appt_detected(backend):
